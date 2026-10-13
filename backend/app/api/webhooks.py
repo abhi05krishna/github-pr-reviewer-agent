@@ -26,13 +26,18 @@ async def github_webhook(request: Request):
         installation_id = payload["installation"]["id"]
         repo_full_name = payload["repository"]["full_name"]
         pr_number = payload["pull_request"]["number"]
+        head_ref = payload["pull_request"]["head"]["ref"]
 
+        
         logger.info(f"PR event: {repo_full_name}#{pr_number} ({payload['action']})")
 
         diff = await fetch_pr_diff(installation_id, repo_full_name, pr_number)
         # Stage 1 just proves we can fetch it -  the agent loop that reads
         # and acts on this diff comes in a later stage.
         logger.info(f"Fetched diff, {len(diff)} characters")
+
+        analysis = await analyze_pr(installation_id, repo_full_name, pr_number, diff, head_ref)
+        logger.info(f"Agent analysis : \n{analysis}")
 
     return {"status": "received"}
 
