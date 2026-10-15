@@ -40,7 +40,7 @@ async def analyze_pr(installation_id:int , repo_full_name : str, pr_number : int
         system_prompt=SYSTEM_PROMPT,
         user_message=f"Review this PR diff : \n\n{wrapped_diff}",
         tools=ALL_PR_REVIEW_TOOLS,
-        tool_functions=tool_functions,
+        tool_function=tool_functions,
 
     )
 
