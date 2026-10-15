@@ -1,6 +1,6 @@
 import time
 import os
-
+import jwt
 import httpx
 
 APP_ID = os.environ["GITHUB_APP_ID"]
