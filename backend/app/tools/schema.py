@@ -33,5 +33,22 @@ SEARCH_CODE_TOOL = {
         },
     },
 }
+FIND_USAGES_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "find_usages",
+        "description": "Scan the repo's source files at the PR branch for every line that mentions a function or symbol name. Use it to find callers of anything the PR changes.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "Function, class or variable name, without parentheses",
+                },
+            },
+            "required": ["symbol"],
+        },
+    },
+}
 
-ALL_PR_REVIEW_TOOLS = [GET_FILE_CONTENT_TOOL, SEARCH_CODE_TOOL]
+ALL_PR_REVIEW_TOOLS = [GET_FILE_CONTENT_TOOL, FIND_USAGES_TOOL]
