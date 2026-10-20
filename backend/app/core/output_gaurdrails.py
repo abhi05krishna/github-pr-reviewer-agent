@@ -3,6 +3,7 @@ from app.models.review import Review
 
 SEVERITY_ORDER = {"blocking": 0, "warning": 1, "suggestion": 2, "nit": 3}
 MAX_COMMENTS = 15
+MAX_LOW_SEVERITY = 3
 MAX_MESSAGE_CHARS = 1200
 MAX_SUMMARY_CHARS = 1500
 
@@ -21,16 +22,31 @@ def clean_text(text: str, limit: int) -> str:
 def enforce_review_rules(review: Review, diff_lines: dict[str, set[int]]) -> Review:
     """Deterministic checks applied after the model. The model proposes,
     this code decides what is allowed to stand."""
-    ordered = sorted(review.comments, key=lambda c: SEVERITY_ORDER[c.severity])[:MAX_COMMENTS]
+    # 1. Most serious first
+    ordered = sorted(review.comments, key=lambda c: SEVERITY_ORDER[c.severity])
 
-    comments = []
+    # 2. Keep every blocking/warning comment, but at most MAX_LOW_SEVERITY
+    #    nits/suggestions in total
+    selected = []
+    low_count = 0
     for c in ordered:
+        if c.severity in ("nit", "suggestion"):
+            low_count += 1
+            if low_count > MAX_LOW_SEVERITY:
+                continue
+        selected.append(c)
+    selected = selected[:MAX_COMMENTS]
+
+    # 3. Clean the text and recompute in_diff (never trust the model's value)
+    comments = []
+    for c in selected:
         in_diff = c.line is not None and c.line in diff_lines.get(c.file, set())
         comments.append(c.model_copy(update={
             "message": clean_text(c.message, MAX_MESSAGE_CHARS),
-            "in_diff": in_diff,  # always recomputed, never trusted
+            "in_diff": in_diff,
         }))
 
+    # 4. Verdict rules
     severities = {c.severity for c in comments}
     verdict = review.verdict
     if "blocking" in severities:

@@ -48,12 +48,14 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     event_type = request.headers.get("X-GitHub-Event")
     payload = json.loads(body)
 
-    if event_type == "pull_request" and payload.get("action") in ("opened", "synchronize"):
+    if event_type == "pull_request" and payload.get("action") in ("opened", "synchronize", "reopened"):
         installation_id = payload["installation"]["id"]
         repo_full_name = payload["repository"]["full_name"]
         pr_number = payload["pull_request"]["number"]
         head_ref = payload["pull_request"]["head"]["ref"]
         logger.info(f"PR event: {repo_full_name}#{pr_number} ({payload['action']})")
         background_tasks.add_task(process_pr, installation_id, repo_full_name, pr_number, head_ref)
+    else:
+        logger.info(f"Ignored event: {event_type} / {payload.get('action')}")
 
     return {"status": "received"}

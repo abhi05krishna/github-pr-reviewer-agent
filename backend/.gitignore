@@ -5,6 +5,7 @@ github-app-private-key.pem
 .env.local
 *.key
 *.pem
+*.log
 __pycache__/
 *.pyc
 .venv/

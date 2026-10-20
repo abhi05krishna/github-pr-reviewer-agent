@@ -39,3 +39,9 @@ def test_links_and_mentions_are_neutralized():
     r = enforce_review_rules(make("comment", [comment("nit", msg="ping @admin see https://evil.example/x")]), DIFF_LINES)
     msg = r.comments[0].message
     assert "https://" not in msg and "@admin" not in msg
+
+def test_low_severity_comments_are_capped():
+    comments = [comment("nit") for _ in range(5)] + [comment("warning")]
+    r = enforce_review_rules(make("comment", comments), DIFF_LINES)
+    assert sum(c.severity == "nit" for c in r.comments) == 3
+    assert any(c.severity == "warning" for c in r.comments)

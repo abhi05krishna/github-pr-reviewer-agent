@@ -1,10 +1,13 @@
 from app.agents.base_agent_loop import run_agent
 from app.tools.schema import ALL_PR_REVIEW_TOOLS
 from app.tools.github_tools import get_file_content, find_usages
-from app.core.guardrails import sanitize_untrusted_text, MAX_CONTENT_CHARS
+from app.core.gaurdrails import sanitize_untrusted_text, MAX_CONTENT_CHARS
 from app.core.diff_utils import annotate_diff, changed_lines
-from app.core.output_guardrails import enforce_review_rules
+from app.core.output_gaurdrails import enforce_review_rules
 from app.models.review import Review
+import logging
+
+logger = logging.getLogger("review")
 
 SYSTEM_PROMPT = """You are a senior code reviewer analyzing a GitHub pull request.
 
@@ -35,8 +38,22 @@ Verdict: request_changes if anything is blocking; comment if there are warnings
 or you could not verify something important; approve only if there are no
 warnings or blocking issues.
 
-For a problem in a file the PR did not change (for example a caller that will
-break), use that file's path, and the line number from find_usages if you have one."""
+When a change breaks code outside the diff (for example callers of a function
+whose signature changed), add one separate comment per affected caller, using
+that caller's file path and the line number from find_usages, in addition to
+any comment on the changed line itself. Quote the caller's exact call in the
+message. Give each caller its own comment; do not fold them into the summary.
+
+Commenting rules:
+- Comment only when the author should change something or double-check
+  something. Never praise, restate the diff, or comment just to say a change
+  is fine.
+- An empty comments list is a good result for a clean pull request.
+- Prefer a few high-value comments over many small ones.
+
+- submit_review(...): your final answer. The tool name is exactly "submit_review".
+  Call it exactly once, with your review fields as its arguments. Never reply in
+  plain text and never call a tool named "json"."""
 
 
 def fallback_review(reason: str) -> Review:
@@ -60,14 +77,18 @@ async def analyze_pr(installation_id: int, repo_full_name: str, pr_number: int, 
     async def _find_usages(symbol: str):
         return await find_usages(installation_id, repo_full_name, symbol, head_ref)
 
-    review = await run_agent(
-        system_prompt=SYSTEM_PROMPT,
-        user_message=f"Review this pull request diff:\n\n{wrapped_diff}",
-        tools=ALL_PR_REVIEW_TOOLS,
-        tool_functions={"get_file_content": _get_file_content, "find_usages": _find_usages},
-        final_tool="submit_review",
-        final_validator=Review.model_validate,
-    )
+    try:
+        review = await run_agent(
+            system_prompt=SYSTEM_PROMPT,
+            user_message=f"Review this pull request diff:\n\n{wrapped_diff}",
+            tools=ALL_PR_REVIEW_TOOLS,
+            tool_functions={"get_file_content": _get_file_content, "find_usages": _find_usages},
+            final_tool="submit_review",
+            final_validator=Review.model_validate,
+        )
+    except Exception:
+        logger.exception("Agent run failed")
+        return fallback_review("the review agent hit an error")
 
     if review is None:
         return fallback_review("the agent did not produce a valid review")

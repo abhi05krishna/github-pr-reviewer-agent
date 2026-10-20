@@ -2,10 +2,11 @@ import json
 import logging
 import os
 from groq import AsyncGroq
+from groq import  BadRequestError
 
 logger = logging.getLogger("agent")
 client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY"))
-
+MAX_MALFORMED_RETRIES = 2
 
 async def run_agent(
     system_prompt: str,
@@ -25,15 +26,33 @@ async def run_agent(
     ]
     seen_calls = set()
 
-    for step in range(max_steps):
-        response = await client.chat.completions.create(
-            model="openai/gpt-oss-120b",
-            messages=messages,
-            tools=tools,
-            max_tokens=4000,
-        )
-        choice = response.choices[0].message
+    malformed_retries = 0
+    valid_tools = ", ".join(t["function"]["name"] for t in tools)
 
+    for step in range(max_steps):
+        try:
+            response = await client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=messages,
+                tools=tools,
+                max_tokens=4000,
+            )
+        except BadRequestError as e:
+            if "tool_use_failed" in str(e) and malformed_retries < MAX_MALFORMED_RETRIES:
+                malformed_retries += 1
+                logger.warning(f"Malformed tool call from model (retry {malformed_retries}): {str(e)[:200]}")
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Your last tool call was malformed. Tool names must match exactly; "
+                        f"the only valid tools are: {valid_tools}. "
+                        "Make your next call using one of those names."
+                    ),
+                })
+                continue
+            raise
+        choice = response.choices[0].message
+        
         if choice.tool_calls:
             messages.append({
                 "role": "assistant",

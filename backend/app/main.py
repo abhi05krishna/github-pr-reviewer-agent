@@ -1,16 +1,25 @@
 from dotenv import load_dotenv
 import logging 
+from pathlib import Path
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
+
+LOG_FILE = Path(__file__).resolve().parent.parent / "agent.log"   # backend/agent.log
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),                       # keeps printing in the terminal
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+    ],
+)
+
 
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.webhooks import router as webhook_router
 
-load_dotenv()
-logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
 
 app = FastAPI(title="PR Review Agent API")
 
