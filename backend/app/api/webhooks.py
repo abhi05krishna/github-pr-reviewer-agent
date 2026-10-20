@@ -29,10 +29,12 @@ async def process_pr(installation_id: int, repo_full_name: str, pr_number: int, 
     try:
         diff = await fetch_pr_diff(installation_id, repo_full_name, pr_number)
         logger.info(f"Fetched diff, {len(diff)} characters")
-        analysis = await analyze_pr(installation_id, repo_full_name, pr_number, diff, head_ref)
-        logger.info(f"Agent analysis:\n{analysis}")
+        
+        review = await analyze_pr(installation_id, repo_full_name, pr_number, diff, head_ref)
+        logger.info("Review:\n%s", review.model_dump_json(indent=2))
     except Exception:
         logger.exception("PR processing failed")
+    
 
 
 @router.post("/webhook/github")
