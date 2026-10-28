@@ -1,5 +1,6 @@
 import re
 from app.models.review import Review
+import logging
 
 SEVERITY_ORDER = {"blocking": 0, "warning": 1, "suggestion": 2, "nit": 3}
 MAX_COMMENTS = 15
@@ -64,3 +65,17 @@ def enforce_review_rules(review: Review, diff_lines: dict[str, set[int]]) -> Rev
         "comments": comments,
         "suspicious_note": note,
     })
+
+logger = logging.getLogger("review")
+
+
+def verify_outside_lines(review: Review, evidence) -> Review:
+    """For comments on files the PR didn't change, keep the line number only
+    if a tool actually showed that line. Otherwise drop it and keep the finding."""
+    fixed = []
+    for c in review.comments:
+        if not c.in_diff and c.line is not None and not evidence.shows(c.file, c.line):
+            logger.warning(f"Dropped unverified line number {c.file}:{c.line}")
+            c = c.model_copy(update={"line": None})
+        fixed.append(c)
+    return review.model_copy(update={"comments": fixed})

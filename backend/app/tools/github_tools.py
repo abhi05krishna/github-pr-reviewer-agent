@@ -8,6 +8,10 @@ MAX_FILES = 40
 MAX_FILE_BYTES = 100_000
 MAX_MATCHES = 40
 
+def number_lines(text: str) -> str:
+    """Prefix each line with its number so the model doesn't have to count."""
+    return "\n".join(f"{i:>4} | {line}" for i, line in enumerate(text.splitlines(), start=1))
+
 # direct scan nto avoid slipping of new repos by the agent 
 
 async def find_usages(installation_id: int, repo_full_name: str, symbol: str, ref: str) -> str:
@@ -79,7 +83,7 @@ async def get_file_content(installation_id:int , repo_full_name:str, path:str, r
         if resp.status_code == 404:
             raise sanitize_untrusted_text(f"File not found: {path}", label="tool_result")
         resp.raise_for_status()
-        return sanitize_untrusted_text(resp.text, label="file_content")
+        return sanitize_untrusted_text(number_lines(resp.text), label="file_content")
 
 
 async def search_code(installation_id: int, repo_full_name: str, query: str) -> str:

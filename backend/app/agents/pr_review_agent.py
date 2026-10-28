@@ -3,7 +3,8 @@ from app.tools.schema import ALL_PR_REVIEW_TOOLS
 from app.tools.github_tools import get_file_content, find_usages
 from app.core.gaurdrails import sanitize_untrusted_text, MAX_CONTENT_CHARS
 from app.core.diff_utils import annotate_diff, changed_lines
-from app.core.output_gaurdrails import enforce_review_rules
+from app.core.output_gaurdrails import enforce_review_rules , verify_outside_lines
+from app.core.evidence import Evidence
 from app.models.review import Review
 import logging
 
@@ -66,6 +67,7 @@ def fallback_review(reason: str) -> Review:
         summary=f"Automated review unavailable: {reason}. A human should review this PR.",
         verdict="comment",
         comments=[],
+        degraded=True,
     )
 
 
@@ -74,12 +76,17 @@ async def analyze_pr(installation_id: int, repo_full_name: str, pr_number: int, 
     annotated = annotate_diff(diff)
     truncated = len(annotated) > MAX_CONTENT_CHARS
     wrapped_diff = sanitize_untrusted_text(annotated, label="diff")
+    evidence = Evidence()
 
     async def _get_file_content(path: str):
-        return await get_file_content(installation_id, repo_full_name, path, head_ref)
+        text = await get_file_content(installation_id, repo_full_name, path, head_ref)
+        evidence.record_file(path, text)
+        return text
 
     async def _find_usages(symbol: str):
-        return await find_usages(installation_id, repo_full_name, symbol, head_ref)
+        text = await find_usages(installation_id, repo_full_name, symbol, head_ref)
+        evidence.record_usages(text)
+        return text
 
     try:
         review = await run_agent(
@@ -98,6 +105,7 @@ async def analyze_pr(installation_id: int, repo_full_name: str, pr_number: int, 
         return fallback_review("the agent did not produce a valid review")
 
     review = enforce_review_rules(review, diff_lines)
+    review = verify_outside_lines(review, evidence)     # must run after in_diff is computed
 
     if truncated and review.verdict == "approve":
         review = review.model_copy(update={
