@@ -53,7 +53,11 @@ Commenting rules:
 
 - submit_review(...): your final answer. The tool name is exactly "submit_review".
   Call it exactly once, with your review fields as its arguments. Never reply in
-  plain text and never call a tool named "json"."""
+  plain text and never call a tool named "json".
+  
+When a fix involves authentication, authorization or other security-sensitive
+behaviour, describe the options and say a human must choose. Never suggest a
+default value that could weaken a check."""
 
 
 def fallback_review(reason: str) -> Review:

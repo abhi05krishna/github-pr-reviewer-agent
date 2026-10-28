@@ -1,12 +1,109 @@
+import asyncio
 import json
 import logging
 import os
-from groq import AsyncGroq
-from groq import  BadRequestError
+import random
+
+from groq import (
+    APIConnectionError,
+    AsyncGroq,
+    BadRequestError,
+    InternalServerError,
+    NotFoundError,
+    RateLimitError,
+)
 
 logger = logging.getLogger("agent")
-client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY"))
-MAX_MALFORMED_RETRIES = 2
+
+MAX_MALFORMED_RETRIES = 2   # per model
+MAX_SERVER_RETRIES = 2      # per model, for 5xx and network errors
+DEFAULT_MODELS = "openai/gpt-oss-120b,llama-3.3-70b-versatile"
+
+_client = None
+
+
+def get_client() -> AsyncGroq:
+    global _client
+    if _client is None:
+        _client = AsyncGroq(api_key=os.environ["GROQ_API_KEY"])
+    return _client
+
+
+def model_chain() -> list[str]:
+    """Models to try in order. Override with LLM_MODELS in .env."""
+    raw = os.environ.get("LLM_MODELS", DEFAULT_MODELS)
+    return [m.strip() for m in raw.split(",") if m.strip()]
+
+
+async def _sleep(seconds: float):
+    await asyncio.sleep(seconds)
+
+
+async def _call_with_backoff(model: str, messages: list, tools: list):
+    """Retry transient server and network errors on ONE model."""
+    for attempt in range(MAX_SERVER_RETRIES + 1):
+        try:
+            return await get_client().chat.completions.create(
+                model=model, messages=messages, tools=tools, max_tokens=4000
+            )
+        except (InternalServerError, APIConnectionError) as e:
+            if attempt == MAX_SERVER_RETRIES:
+                raise
+            delay = min(2 ** attempt, 8) + random.random()
+            logger.warning(f"{model}: {type(e).__name__}; retry {attempt + 1} in {delay:.1f}s")
+            await _sleep(delay)
+
+
+class ModelSession:
+    """Tracks which model we're on and decides when to retry or switch."""
+
+    def __init__(self, tools: list):
+        self.models = model_chain()
+        self.idx = 0
+        self.malformed = 0
+        self.valid_tools = ", ".join(t["function"]["name"] for t in tools)
+
+    def _switch(self):
+        self.idx += 1
+        self.malformed = 0
+
+    async def complete(self, messages: list, tools: list):
+        while True:
+            if self.idx >= len(self.models):
+                raise RuntimeError("All configured models failed")
+            model = self.models[self.idx]
+            try:
+                return await _call_with_backoff(model, messages, tools)
+            except (RateLimitError, NotFoundError) as e:
+                logger.warning(f"{model}: unavailable ({type(e).__name__}); switching to next model")
+                self._switch()
+            except (InternalServerError, APIConnectionError) as e:
+                logger.warning(f"{model}: still failing after retries ({type(e).__name__}); switching")
+                self._switch()
+            except BadRequestError as e:
+                text = str(e)
+                if "model_decommissioned" in text or "model_not_found" in text:
+                    # Hosted models get retired; treat it like any other unavailable model
+                    logger.warning(f"{model}: model unavailable; switching to next model")
+                    self._switch()
+                elif "tool_use_failed" not in text:
+                    raise   # a real bug in our request; don't hide it
+                else:
+                    self.malformed += 1
+                    if self.malformed <= MAX_MALFORMED_RETRIES:
+                        logger.warning(f"{model}: malformed tool call (retry {self.malformed})")
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "Your last tool call was malformed. Tool names must match exactly; "
+                                f"the only valid tools are: {self.valid_tools}. "
+                                "Make your next call using one of those names."
+                            ),
+                        })
+                    else:
+                        logger.warning(f"{model}: too many malformed tool calls; switching model")
+                        self._switch()
+
 
 async def run_agent(
     system_prompt: str,
@@ -18,41 +115,18 @@ async def run_agent(
     max_steps: int = 8,
 ):
     """ReAct-style loop. If final_tool is set, the run ends when the model
-    calls it with arguments that pass final_validator. Invalid submissions
-    are sent back to the model as errors so it can fix them."""
+    calls it with arguments that pass final_validator."""
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
     ]
     seen_calls = set()
-
-    malformed_retries = 0
-    valid_tools = ", ".join(t["function"]["name"] for t in tools)
+    session = ModelSession(tools)
 
     for step in range(max_steps):
-        try:
-            response = await client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=messages,
-                tools=tools,
-                max_tokens=4000,
-            )
-        except BadRequestError as e:
-            if "tool_use_failed" in str(e) and malformed_retries < MAX_MALFORMED_RETRIES:
-                malformed_retries += 1
-                logger.warning(f"Malformed tool call from model (retry {malformed_retries}): {str(e)[:200]}")
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "Your last tool call was malformed. Tool names must match exactly; "
-                        f"the only valid tools are: {valid_tools}. "
-                        "Make your next call using one of those names."
-                    ),
-                })
-                continue
-            raise
+        response = await session.complete(messages, tools)
         choice = response.choices[0].message
-        
+
         if choice.tool_calls:
             messages.append({
                 "role": "assistant",
@@ -102,7 +176,6 @@ async def run_agent(
             continue
 
         if final_tool:
-            # The model answered in plain text instead of submitting. Push it back.
             messages.append({"role": "assistant", "content": choice.content or "(no content)"})
             messages.append({"role": "user", "content": f"Do not reply in plain text. Finish by calling {final_tool}."})
             continue

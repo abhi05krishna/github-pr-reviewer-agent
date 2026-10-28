@@ -19,3 +19,4 @@ class Review(BaseModel):
     comments: list[ReviewComment] = Field(default_factory=list, max_length=50)
     suspicious_content: bool = False
     suspicious_note: Optional[str] = Field(default=None, max_length=1000)
+    degraded: bool = False   # True when the agent failed and this is only a placeholder
